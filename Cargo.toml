@@ -1,0 +1,23 @@
+[package]
+name = "lasplot"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+actix-web = "4.4"
+actix-web-codegen = "4.2"
+tokio = { version = "1.35", features = ["full"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+futures = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+reqwest = { version = "0.11", features = ["stream"] }
+image = "0.25"
+raqote = "0.8.5"
+plotters = "0.3"
+regex = "1.10"
+anyhow = "1.0"
+base64 = { version = "0.21", features = ["alloc"] }
+url = "2.5"
+bytes = "1.5"

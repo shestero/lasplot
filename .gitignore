@@ -1,0 +1,74 @@
+# === Rust / Cargo ===
+/target/
+/debug/
+/release/
+
+# Incremental compilation cache
+target/**/incremental/
+
+# Cargo package directory
+/target/package/
+
+# Cargo.lock for libraries
+/Cargo.lock
+
+# === Rust tooling ===
+*.rlib
+*.rmeta
+
+# Code coverage
+/coverage/
+/tarpaulin-report.xml
+
+# Rustfmt / Clippy
+/.rustfmt.toml.bk
+
+*.log
+*.log.*
+
+*.tmp
+*.swp
+*.swo
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# === IDE / Editors ===
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# JetBrains CLion / RustRover
+.idea/
+*.iml
+
+# Vim
+*.swp
+*.swo
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+
+# === Misc ===
+/dist/
+/out/
+/build/
+/docs/generated/
+
+# Local environment variables
+.env
+.env.*
+*.local
+
+# === WASM builds ===
+pkg/
+wasm-pack.log
+
+# === Docker ===
+/docker-data/
+/docker-volume/
