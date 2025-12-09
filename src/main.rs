@@ -266,9 +266,6 @@ async fn handle_test_page(
     let files_info = read_laslist_file_with_info(&config)
         .map_err(|e| actix_web::error::ErrorInternalServerError(format!("Failed to read laslist: {}", e)))?;
     
-    // Берем первые 4 файла для кнопок
-    let button_files: Vec<_> = files_info.iter().take(4).map(|f| f.url.as_str()).collect();
-    
     // Создаем список файлов с информацией
     let mut file_items = Vec::new();
     for file_info in &files_info {
@@ -325,15 +322,6 @@ async fn handle_test_page(
             font-family: Arial, sans-serif;
             margin: 20px;
         }}
-        .button-group {{
-            margin-bottom: 30px;
-        }}
-        .button-group button {{
-            margin: 5px;
-            padding: 10px 20px;
-            font-size: 16px;
-            cursor: pointer;
-        }}
         .file-list {{
             margin-top: 20px;
         }}
@@ -356,11 +344,6 @@ async fn handle_test_page(
 <body>
     <h1>LAS Plot Test Page</h1>
     
-    <div class="button-group">
-        <h2>Open in New Tabs (First 4 files):</h2>
-        {}
-    </div>
-    
     <div class="file-list">
         <h2>All LAS Files:</h2>
         <ul>
@@ -376,9 +359,6 @@ async fn handle_test_page(
 </body>
 </html>
 "#,
-        button_files.iter().map(|f| {
-            format!("<button onclick=\"openFile('{}')\">{}</button>", f, f)
-        }).collect::<Vec<_>>().join("\n        "),
         file_items.join("\n            ")
     );
     
@@ -696,6 +676,7 @@ fn generate_html(
     let mut html_before_scale = String::new();
     html_before_scale.push_str(&format!("<html><head><meta charset='utf-8'><title>LAS Plot - {}</title></head><body>\n", file_name));
     html_before_scale.push_str(&format!("<h2>LAS Plot - {}</h2>\n", file_name));
+    html_before_scale.push_str("<p style='font-size: 0.9em; color: #666; margin-top: 5px; margin-bottom: 15px;'>Free for non-commercial use. License: <a href='https://github.com/shestero/lasplot/blob/main/LICENSE' target='_blank'>https://github.com/shestero/lasplot/blob/main/LICENSE</a></p>\n");
     
     // Генерируем HTML для двух верхних таблиц
     let mut curves_table_html = String::new();
