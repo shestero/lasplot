@@ -7,6 +7,9 @@ bind_port = 8088
 # Папка с LAS файлами (если указано имя файла без URL)
 samples_dir = "samples"
 
+# Файл со списком LAS файлов для тестовой страницы
+#laslist_file = "/home/shestero/lasplot/ks_las_files.txt" # "laslist.txt"
+
 # Количество шагов основного параметра на одну строку HTML таблицы
 html_row_steps = 25
 

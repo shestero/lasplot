@@ -68,21 +68,46 @@ impl LasFile {
 
             match in_section {
                 Some("version") => {
-                    if let Some((key, value)) = Self::parse_key_value(line) {
-                        if key == "VERS." {
-                            version = value.trim().to_string();
+                    // Версия находится в части перед двоеточием
+                    // Формат: VERS.                 2.0:   описание
+                    // Нужно взять значение из части до двоеточия после "VERS."
+                    if line.to_uppercase().contains("VERS") {
+                        if let Some(colon_pos) = line.find(':') {
+                            let before_colon = &line[..colon_pos].trim();
+                            // Ищем "VERS." или "VERS" (без учета регистра)
+                            let vers_upper = before_colon.to_uppercase();
+                            if let Some(vers_pos) = vers_upper.find("VERS") {
+                                let after_vers = &before_colon[vers_pos + 4..]; // +4 для "VERS"
+                                // Пропускаем точку и пробелы, берем первое слово/значение
+                                let version_value = after_vers.trim_start_matches('.').trim();
+                                // Берем первое слово (до пробела или до конца)
+                                if let Some(space_pos) = version_value.find(char::is_whitespace) {
+                                    version = version_value[..space_pos].to_string();
+                                } else {
+                                    version = version_value.to_string();
+                                }
+                            }
                         }
                     }
                 }
                 Some("well") => {
-                    if let Some((key, value)) = Self::parse_key_value(line) {
-                        let key_upper = key.to_uppercase();
-                        if key_upper == "NULL" {
-                            if let Ok(val) = f64::from_str(value.trim()) {
-                                null_value = val;
+                    // В LAS файле формат: KEY.  значение : описание
+                    // Значение находится между ключом и двоеточием
+                    if let Some(colon_pos) = line.find(':') {
+                        let before_colon = line[..colon_pos].trim();
+                        // Ищем точку, которая отделяет ключ от значения
+                        if let Some(dot_pos) = before_colon.find('.') {
+                            let key = before_colon[..dot_pos].trim().to_string();
+                            let value = before_colon[dot_pos + 1..].trim().to_string();
+                            
+                            let key_upper = key.to_uppercase();
+                            if key_upper == "NULL" {
+                                if let Ok(val) = f64::from_str(&value) {
+                                    null_value = val;
+                                }
                             }
+                            well_info.insert(key, value);
                         }
-                        well_info.insert(key.to_string(), value.trim().to_string());
                     }
                 }
                 Some("curve") => {

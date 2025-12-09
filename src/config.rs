@@ -8,6 +8,8 @@ pub struct Config {
     #[serde(default = "default_bind_port")]
     pub bind_port: u16,
     pub samples_dir: String,
+    #[serde(default = "default_laslist_file")]
+    pub laslist_file: String,
     pub html_row_steps: usize,
     pub pixels_per_step: usize,
     pub image_width: usize,
@@ -21,6 +23,10 @@ fn default_bind_address() -> String {
 
 fn default_bind_port() -> u16 {
     8080
+}
+
+fn default_laslist_file() -> String {
+    "lasfiles.txt".to_string()
 }
 
 impl Config {
