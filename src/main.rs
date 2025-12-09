@@ -8,8 +8,8 @@ use anyhow::{Context, Result};
 use base64::Engine;
 use config::Config;
 use futures::future::ok;
-use futures::stream::once;
-use futures::StreamExt;
+use futures::stream::{self, once, StreamExt};
+use futures::TryStreamExt;
 use las::LasFile;
 use plot::{hex_to_rgb, generate_plot_png, PlotConfig, RGBColor};
 //use std::collections::hash_map::DefaultHasher;
@@ -268,14 +268,15 @@ async fn handle_request(
     // Генерируем случайные цвета для недостающих параметров
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
-    for (idx, curve) in las_file.curves.iter().enumerate() {
+    let curves = Arc::new(las_file.curves.clone());
+    for (idx, curve) in curves.iter().enumerate() {
         if idx == main_param_idx {
             continue; // Пропускаем основной параметр
         }
 
         let curve_data = las_file.get_curve_data(idx);
         if let Some((min, max)) = las_file.get_curve_stats(idx) {
-            curves_data.push((curve_data, curve.mnemonic.as_str()));
+            curves_data.push((curve_data, curve.mnemonic.clone()));
             x_ranges.push((min, max));
             
             let color_idx = curves_data.len() - 1;
@@ -312,15 +313,15 @@ async fn handle_request(
     let row_height = config.html_row_steps * config.pixels_per_step;
 
     // Подготавливаем данные для заголовка (клонируем нужные части)
-    let curves_info: Vec<_> = las_file.curves.iter().map(|c| (c.mnemonic.clone(), c.unit.clone(), c.description.clone())).collect();
-    let curves_stats: Vec<_> = (0..las_file.curves.len())
+    let curves_info: Vec<_> = curves.iter().map(|c| (c.mnemonic.clone(), c.unit.clone(), c.description.clone())).collect();
+    let curves_stats: Vec<_> = (0..curves.len())
         .map(|i| las_file.get_curve_stats(i))
         .collect();
 
     // Создаем маппинг: индекс кривой -> hex цвет для всех кривых (кроме основного параметра)
     let mut curve_to_color: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
     let mut color_idx = 0;
-    for (idx, _curve) in las_file.curves.iter().enumerate() {
+    for (idx, _curve) in curves.iter().enumerate() {
         if idx == main_param_idx {
             continue; // Пропускаем основной параметр
         }
@@ -331,7 +332,7 @@ async fn handle_request(
         } else {
             // Генерируем случайный цвет для этой кривой (должно быть уже в color_hex_strings, но на всякий случай)
             let mut hasher = DefaultHasher::new();
-            (idx, &las_file.curves[idx].mnemonic).hash(&mut hasher);
+            (idx, &curves[idx].mnemonic).hash(&mut hasher);
             let rng_seed = hasher.finish();
             
             let r = ((rng_seed >> 0) & 0xFF) as u8;
@@ -351,10 +352,10 @@ async fn handle_request(
     let stream = generate_html(
         curves_info,
         curves_stats,
-        curves_data,
+        curves_data.into(),
         x_ranges,
         plot_colors,
-        depth_data,
+        depth_data,//.into(),
         depth_min,
         depth_max,
         config.html_row_steps,
@@ -363,14 +364,15 @@ async fn handle_request(
         config.image_width,
         config.separate_depth_column,
         main_param_idx,
-        &curve_to_color,
+        curve_to_color,
     )
-    .await
     .map_err(|e| actix_web::error::ErrorInternalServerError(format!("Failed to generate HTML: {}", e)))?;
 
-    Ok(HttpResponse::Ok()
-        .content_type("text/html; charset=utf-8")
-        .streaming(stream))
+    let response =
+        HttpResponse::Ok()
+            .content_type("text/html; charset=utf-8")
+            .streaming(stream);
+    Ok(response)
 }
 
 async fn load_las_file(file_param: &str, config: &Config) -> Result<String> {
@@ -390,7 +392,7 @@ async fn load_las_file(file_param: &str, config: &Config) -> Result<String> {
 
 async fn generate_html_row(
     plot_config: &PlotConfig,
-    curves_data: &[(Vec<Option<f64>>, &str)],
+    curves_data: Vec<(Vec<Option<f64>>, String)>,
     depth_data: &[Option<f64>],
     start_block_value: usize,
     end_block_value: usize,
@@ -406,7 +408,7 @@ async fn generate_html_row(
 
     let png_data = generate_plot_png(
         plot_config,
-        curves_data,
+        curves_data.into(),
         depth_data,
         start_block_value,
         end_block_value,
@@ -429,10 +431,10 @@ async fn generate_html_row(
     Ok(row_html)
 }
 
-async fn generate_html(
+fn generate_html(
     curves_info: Vec<(String, String, String)>,
     curves_stats: Vec<Option<(f64, f64)>>,
-    curves_data: Vec<(Vec<Option<f64>>, &str)>,
+    curves_data: Arc<Vec<(Vec<Option<f64>>, String)>>,
     x_ranges: Vec<(f64, f64)>,
     colors: Vec<RGBColor>,
     depth_data: Vec<Option<f64>>,
@@ -444,8 +446,11 @@ async fn generate_html(
     image_width: usize,
     separate_depth_column: bool,
     main_param_idx: usize,
-    curve_to_color: &std::collections::HashMap<usize, String>,
-) -> Result<impl futures::Stream<Item = std::result::Result<Bytes, actix_web::Error>>> {
+    curve_to_color: std::collections::HashMap<usize, String>,
+) -> Result<impl futures::Stream<Item = Result<Bytes, actix_web::Error>> + 'static, actix_web::Error> {
+    //let curves_data = Arc::new(curves_data);
+    let depth_data = Arc::new(depth_data);
+
     let total_steps = depth_data.len();
     let num_rows = (total_steps + html_row_steps - 1) / html_row_steps;
 
@@ -498,11 +503,11 @@ async fn generate_html(
 
     let scale_png = generate_plot_png(
         &scale_config,
-        &curves_data,
+        curves_data.to_vec(),
         &depth_data,
         0,
         html_row_steps.min(depth_data.len()),
-    )?;
+    ).map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
 
     let scale_base64 = base64::engine::general_purpose::STANDARD.encode(&scale_png);
     let html_scale_row = if separate_depth_column {
@@ -521,15 +526,16 @@ async fn generate_html(
     // Высота каждого блока фиксированная: html_row_steps * pixels_per_step
     let block_height = html_row_steps * pixels_per_step;
     
-    let plot_config = PlotConfig {
+    let plot_config = Arc::new(PlotConfig {
         width: image_width as u32,
         height: block_height as u32,
         colors: colors.clone(),
         x_ranges: x_ranges.clone(),
         y_range: (depth_min, depth_max),
         show_scales: false,
-    };
+    });
 
+    /*
     let mut html_plot_rows = String::new();
     for row_idx in 0..num_rows {
         let start_block_value = row_idx * html_row_steps;
@@ -558,22 +564,61 @@ async fn generate_html(
         
         html_plot_rows.push_str(&row_html);
     }
+    */
+    // 1) поток индексов
+    let depth_len = depth_data.len();
+    let html_plot_rows = stream::iter(0..num_rows)
+        // 2) превращаем каждый индекс в future
+        .map(move |row_idx| {
+            let start_block_value = row_idx * html_row_steps;
+            let end_block_value = (start_block_value + html_row_steps).min(depth_data.len());
+
+            // Arc clones
+            let plot_config = plot_config.clone();
+            let curves_data = curves_data.clone();
+            let depth_data = depth_data.clone();
+
+            async move {
+                if start_block_value >= depth_len {
+                    return Ok(String::new());
+                }
+
+                let actual_steps = end_block_value - start_block_value;
+                let image_height = actual_steps * pixels_per_step;
+
+                generate_html_row(
+                    &plot_config,
+                    curves_data.to_vec(),
+                    &depth_data,
+                    start_block_value,
+                    end_block_value,
+                    block_height,
+                    image_width,
+                    image_height,
+                    separate_depth_column,
+                    depth_min,
+                )
+                    .await
+            }
+        })
+        // 3) параллельность
+        .buffered(2)
+        // 4) String → Bytes
+        .map(|res| res.map(Bytes::from))
+        // 5) приведение типа ошибки
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e));
 
     // HTML конца таблицы и документа
     let html_end = "</table>\n</body></html>\n";
 
     // Слепляем все части
-    let html = format!("{}{}{}{}", html_before_scale, html_scale_row, html_plot_rows, html_end);
+    //let html = format!("{}{}{}{}", html_before_scale, html_scale_row, html_plot_rows, html_end);
     
     // Оборачиваем в stream через once (фиктивно)
     //let stream = once(ok::<_, actix_web::Error>(Bytes::from(html)));
 
-    let s1 = once(ok::<_, actix_web::Error>(Bytes::from(html_before_scale)));
-    let s2 = once(ok::<_, actix_web::Error>(Bytes::from(html_scale_row)));
-    let s3 = once(ok::<_, actix_web::Error>(Bytes::from(html_plot_rows)));
-    let s4 = once(ok::<_, actix_web::Error>(Bytes::from(html_end)));
+    let before = once(ok::<_, actix_web::Error>(Bytes::from(html_before_scale + &html_scale_row)));
+    let after = once(ok::<_, actix_web::Error>(Bytes::from(html_end)));
 
-    let s = s1.chain(s2.chain(s3.chain(s4)));
-
-    Ok(s)
+    Ok( before.chain(html_plot_rows.chain(after)) )
 }

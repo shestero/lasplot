@@ -29,7 +29,7 @@ pub struct PlotConfig {
 
 pub fn generate_plot_png(
     config: &PlotConfig,
-    curves_data: &[(Vec<Option<f64>>, &str)],
+    curves_data: Vec<(Vec<Option<f64>>, String)>,
     depth_data: &[Option<f64>],
     depth_start_idx: usize,
     depth_end_idx: usize,
@@ -67,7 +67,7 @@ pub fn generate_plot_png(
 fn draw_scales(
     img: &mut RgbImage,
     config: &PlotConfig,
-    curves_data: &[(Vec<Option<f64>>, &str)],
+    curves_data: Vec<(Vec<Option<f64>>, String)>,
 ) -> Result<()> {
     let mut x_pos = 20u32;
     let scale_height = (config.height as f64 * 0.8) as u32;
@@ -112,7 +112,7 @@ fn draw_scales(
 fn draw_curves(
     img: &mut RgbImage,
     config: &PlotConfig,
-    curves_data: &[(Vec<Option<f64>>, &str)],
+    curves_data: Vec<(Vec<Option<f64>>, String)>,
     depth_data: &[Option<f64>],
     depth_start_idx: usize,
     depth_end_idx: usize,
@@ -222,6 +222,7 @@ fn draw_curves(
     Ok(())
 }
 
+// todo: delete
 fn draw_line(img: &mut RgbImage, x1: u32, y1: u32, x2: u32, y2: u32, color: [u8; 3]) {
     let dx = (x2 as i32 - x1 as i32).abs();
     let dy = (y2 as i32 - y1 as i32).abs();
@@ -288,6 +289,7 @@ pub fn draw_line_dt(
     dt.stroke(&path, &source, &stroke, &raqote::DrawOptions::new());
 }
 
+// todo: delete
 pub fn draw_line_new(
     img: &mut RgbImage,
     x1: u32,
