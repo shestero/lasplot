@@ -98,6 +98,8 @@ pub struct PlotConfig {
     pub pixels_per_step: usize,
     pub html_row_steps: usize,
     pub scale_spacing: usize,
+    pub tick_size_major: usize,
+    pub tick_size_minor: usize,
 }
 
 pub fn generate_plot_png(
@@ -156,7 +158,7 @@ fn draw_scales(
             continue;
         }
 
-        //let (x_min, x_max) = config.x_ranges[idx];
+        let (x_min, x_max) = config.x_ranges[idx];
         let rgb = config.colors[idx];
         
         // Рисуем горизонтальную линию шкалы
@@ -186,20 +188,66 @@ fn draw_scales(
         
         dt.stroke(&path, &source, &stroke, &raqote::DrawOptions::new());
         
-        // Рисуем метки (вертикальные линии)
-        let num_ticks = 5;
-        for i in 0..=num_ticks {
-            let t = i as f32 / num_ticks as f32;
-            let tick_x = x_start + t * (x_end - x_start);
-            let tick_y_start = (y_pos.saturating_sub(3)) as f32;
-            let tick_y_end = (y_pos + 3) as f32;
+        // Рисуем засечки только если диапазон валиден
+        if x_max > x_min && x_max.is_finite() && x_min.is_finite() {
+            let range = x_max - x_min;
             
-            let mut pb_tick = PathBuilder::new();
-            pb_tick.move_to(tick_x, tick_y_start);
-            pb_tick.line_to(tick_x, tick_y_end);
-            let path_tick = pb_tick.finish();
+            // Определяем порядок старшего разряда
+            let order = range.log10().floor();
+            let major_step = 10_f64.powf(order);
+            let minor_step = 10_f64.powf(order - 1.0);
             
-            dt.stroke(&path_tick, &source, &stroke, &raqote::DrawOptions::new());
+            // Находим первую длинную засечку
+            let first_major = (x_min / major_step).ceil() * major_step;
+            
+            // Собираем позиции длинных засечек для исключения их из коротких
+            let mut major_positions = std::collections::HashSet::new();
+            
+            // Рисуем длинные засечки
+            let mut major_value = first_major;
+            while major_value <= x_max {
+                let t = ((major_value - x_min) / range) as f32;
+                if t >= 0.0 && t <= 1.0 {
+                    let tick_x = x_start + t * (x_end - x_start);
+                    let tick_y_start = (y_pos.saturating_sub(config.tick_size_major as u32)) as f32;
+                    let tick_y_end = (y_pos + config.tick_size_major as u32) as f32;
+                    
+                    let mut pb_tick = PathBuilder::new();
+                    pb_tick.move_to(tick_x, tick_y_start);
+                    pb_tick.line_to(tick_x, tick_y_end);
+                    let path_tick = pb_tick.finish();
+                    
+                    dt.stroke(&path_tick, &source, &stroke, &raqote::DrawOptions::new());
+                    
+                    // Сохраняем позицию для исключения из коротких засечек
+                    major_positions.insert((major_value / minor_step).round() as i64);
+                }
+                major_value += major_step;
+            }
+            
+            // Рисуем короткие засечки
+            let first_minor = (x_min / minor_step).ceil() * minor_step;
+            let mut minor_value = first_minor;
+            while minor_value <= x_max {
+                // Пропускаем места, где уже есть длинные засечки
+                let minor_index = (minor_value / minor_step).round() as i64;
+                if !major_positions.contains(&minor_index) {
+                    let t = ((minor_value - x_min) / range) as f32;
+                    if t >= 0.0 && t <= 1.0 {
+                        let tick_x = x_start + t * (x_end - x_start);
+                        let tick_y_start = (y_pos.saturating_sub(config.tick_size_minor as u32)) as f32;
+                        let tick_y_end = (y_pos + config.tick_size_minor as u32) as f32;
+                        
+                        let mut pb_tick = PathBuilder::new();
+                        pb_tick.move_to(tick_x, tick_y_start);
+                        pb_tick.line_to(tick_x, tick_y_end);
+                        let path_tick = pb_tick.finish();
+                        
+                        dt.stroke(&path_tick, &source, &stroke, &raqote::DrawOptions::new());
+                    }
+                }
+                minor_value += minor_step;
+            }
         }
 
         y_pos += config.scale_spacing as u32;

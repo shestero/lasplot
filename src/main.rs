@@ -595,6 +595,8 @@ async fn handle_request(
         &well_info_text,
         config.scale_spacing,
         config.max_scales,
+        config.tick_size_major,
+        config.tick_size_minor,
     ).map_err(|e| actix_web::error::ErrorInternalServerError(e))
     .map_err(|e| actix_web::error::ErrorInternalServerError(format!("Failed to generate HTML: {}", e)))?;
 
@@ -681,6 +683,8 @@ fn generate_html(
     well_info: &[(String, String)],
     scale_spacing: usize,
     max_scales: usize,
+    tick_size_major: usize,
+    tick_size_minor: usize,
 ) -> Result<impl futures::Stream<Item = Result<Bytes, actix_web::Error>> + 'static, actix_web::Error> {
     //let curves_data = Arc::new(curves_data);
     let depth_data = Arc::new(depth_data);
@@ -775,6 +779,8 @@ fn generate_html(
         pixels_per_step,
         html_row_steps,
         scale_spacing,
+        tick_size_major,
+        tick_size_minor,
     };
 
     let scale_png = generate_plot_png(
@@ -812,6 +818,8 @@ fn generate_html(
         pixels_per_step,
         html_row_steps,
         scale_spacing,
+        tick_size_major,
+        tick_size_minor,
     });
 
     /*
@@ -897,6 +905,8 @@ fn generate_html(
                     pixels_per_step: plot_config.pixels_per_step,
                     html_row_steps: plot_config.html_row_steps,
                     scale_spacing: plot_config.scale_spacing,
+                    tick_size_major: plot_config.tick_size_major,
+                    tick_size_minor: plot_config.tick_size_minor,
                 };
                 
                 generate_html_row(

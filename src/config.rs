@@ -16,6 +16,10 @@ pub struct Config {
     pub scale_spacing: usize,
     #[serde(default = "default_max_scales")]
     pub max_scales: usize,
+    #[serde(default = "default_tick_size_major")]
+    pub tick_size_major: usize,
+    #[serde(default = "default_tick_size_minor")]
+    pub tick_size_minor: usize,
     pub default_colors: Vec<String>,
     pub separate_depth_column: bool,
 }
@@ -34,6 +38,14 @@ fn default_laslist_file() -> String {
 
 fn default_max_scales() -> usize {
     6
+}
+
+fn default_tick_size_major() -> usize {
+    8
+}
+
+fn default_tick_size_minor() -> usize {
+    4
 }
 
 impl Config {
