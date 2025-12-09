@@ -1,10 +1,80 @@
 use anyhow::Result;
-use image::{ImageEncoder, Rgb, RgbImage};
+use image::{ImageEncoder, Rgba, RgbaImage};
 use raqote::{
     DrawTarget, PathBuilder, Source, SolidSource, StrokeStyle, DrawOptions, LineCap, LineJoin
 };
 
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64::*;
+
 pub type RGBColor = [u8; 3];
+
+/// Конвертирует BGRA данные в RGBA используя SIMD-оптимизацию
+/// BGRA: [B, G, R, A] -> RGBA: [R, G, B, A]
+#[inline]
+fn convert_bgra_to_rgba(src: &[u8], dst: &mut [u8]) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("ssse3") {
+            unsafe {
+                convert_bgra_to_rgba_sse(src, dst);
+                return;
+            }
+        }
+    }
+    
+    // Fallback: обычное копирование с перестановкой
+    convert_bgra_to_rgba_scalar(src, dst);
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "ssse3")]
+unsafe fn convert_bgra_to_rgba_sse(src: &[u8], dst: &mut [u8]) {
+    // Маска для перестановки BGRA -> RGBA используя _mm_shuffle_epi8
+    // BGRA: [B=0, G=1, R=2, A=3] -> RGBA: [R=2, G=1, B=0, A=3]
+    // Для каждого пикселя: индексы [2, 1, 0, 3]
+    let shuffle_mask = _mm_setr_epi8(
+        2, 1, 0, 3,  // Пиксель 0: BGR[A] -> RGB[A]
+        6, 5, 4, 7,  // Пиксель 1
+        10, 9, 8, 11, // Пиксель 2
+        14, 13, 12, 15, // Пиксель 3
+    );
+    
+    let pixel_count = src.len() / 4;
+    let simd_count = pixel_count / 4; // Обрабатываем по 4 пикселя за раз (16 байт)
+    let remainder = pixel_count % 4;
+    
+    let src_ptr = src.as_ptr();
+    let dst_ptr = dst.as_mut_ptr();
+    
+    // Обрабатываем по 4 пикселя (16 байт) за раз
+    for i in 0..simd_count {
+        let offset = i * 16;
+        let src_vec = _mm_loadu_si128((src_ptr.add(offset)) as *const __m128i);
+        let shuffled = _mm_shuffle_epi8(src_vec, shuffle_mask);
+        _mm_storeu_si128((dst_ptr.add(offset)) as *mut __m128i, shuffled);
+    }
+    
+    // Обрабатываем оставшиеся пиксели скалярно
+    if remainder > 0 {
+        let offset = simd_count * 16;
+        convert_bgra_to_rgba_scalar(&src[offset..], &mut dst[offset..]);
+    }
+}
+
+/// Скалярная версия конвертации BGRA -> RGBA (fallback)
+#[inline]
+fn convert_bgra_to_rgba_scalar(src: &[u8], dst: &mut [u8]) {
+    let src_pixels = src.chunks_exact(4);
+    let dst_pixels = dst.chunks_exact_mut(4);
+    for (src_pixel, dst_pixel) in src_pixels.zip(dst_pixels) {
+        // BGRA -> RGBA
+        dst_pixel[0] = src_pixel[2]; // R
+        dst_pixel[1] = src_pixel[1]; // G
+        dst_pixel[2] = src_pixel[0]; // B
+        dst_pixel[3] = src_pixel[3]; // A
+    }
+}
 
 pub fn hex_to_rgb(hex: &str) -> RGBColor {
     let hex = hex.trim_start_matches('#');
@@ -37,11 +107,11 @@ pub fn generate_plot_png(
     depth_start_idx: usize,
     depth_end_idx: usize,
 ) -> Result<Vec<u8>> {
-    let mut img = RgbImage::new(config.width, config.height);
+    let mut img = RgbaImage::new(config.width, config.height);
     
-    // Заполняем белым фоном
+    // Заполняем белым фоном с непрозрачным альфа-каналом
     for pixel in img.pixels_mut() {
-        *pixel = Rgb([255, 255, 255]);
+        *pixel = Rgba([255, 255, 255, 255]);
     }
 
     if config.show_scales {
@@ -60,7 +130,7 @@ pub fn generate_plot_png(
             &img.into_raw(),
             config.width,
             config.height,
-            image::ColorType::Rgb8.into(),
+            image::ColorType::Rgba8.into(),
         )?;
     }
     
@@ -68,7 +138,7 @@ pub fn generate_plot_png(
 }
 
 fn draw_scales(
-    img: &mut RgbImage,
+    img: &mut RgbaImage,
     config: &PlotConfig,
     curves_data: Vec<(Vec<Option<f64>>, String)>,
 ) -> Result<()> {
@@ -86,7 +156,7 @@ fn draw_scales(
             continue;
         }
 
-        let (x_min, x_max) = config.x_ranges[idx];
+        //let (x_min, x_max) = config.x_ranges[idx];
         let rgb = config.colors[idx];
         
         // Рисуем горизонтальную линию шкалы
@@ -138,29 +208,17 @@ fn draw_scales(
         }
     }
     
-    // Копируем из DrawTarget в RgbImage
+    // Копируем из DrawTarget (BGRA) в RgbaImage (RGBA) с SIMD-оптимизацией
     let data_u8: &[u8] = dt.get_data_u8();
-    let /* mut */ dst = img.as_mut();
+    let dst = img.as_mut();
     
-    for y in 0..config.height {
-        for x in 0..config.width {
-            let src_idx: usize = ((y * config.width + x) * 4).try_into().unwrap();
-            let b = data_u8[src_idx + 0];
-            let g = data_u8[src_idx + 1];
-            let r = data_u8[src_idx + 2];
-            
-            let dst_idx: usize = ((y * config.width + x) * 3).try_into().unwrap();
-            dst[dst_idx + 0] = r;
-            dst[dst_idx + 1] = g;
-            dst[dst_idx + 2] = b;
-        }
-    }
+    convert_bgra_to_rgba(data_u8, dst);
 
     Ok(())
 }
 
 fn draw_curves(
-    img: &mut RgbImage,
+    img: &mut RgbaImage,
     config: &PlotConfig,
     curves_data: Vec<(Vec<Option<f64>>, String)>,
     depth_data: &[Option<f64>],
@@ -168,7 +226,7 @@ fn draw_curves(
     depth_end_idx: usize,
 ) -> Result<()> {
     let plot_width = config.width as f64;
-    let plot_height = (config.height as f64 * 1.04) as f64; // TODO: coef!
+    let plot_height = config.height as f64; // (config.height as f64 * 1.04) as f64; // TODO: coef!
     let plot_x_start = 100 as f64;
     let plot_y_start = 0 as f64;
     let (mut y_min, mut y_max) = config.y_range;
@@ -259,34 +317,22 @@ fn draw_curves(
 
     // Получаем сырые байты BGRA (u8) из DrawTarget
     // docs.rs: get_data_u8() / get_data_u8_mut() дают BGRA порядок (little endian).
-    // Мы прочитаем их и конвертируем в image::RgbImage (RGB).
+    // Мы прочитаем их и конвертируем в image::RgbaImage (RGBA).
     let data_u8: &[u8] = dt.get_data_u8(); // &[u8], порядок BGRA для каждого пикселя
     // data_u8.len() == (w*h*4)
 
-    // Копируем в RgbImage (RGB)
-    // Raqote: BGRA per-pixel (b,g,r,a) on little-endian. Берём b,g,r и игнорируем alpha.
-    let mut dst = img.as_mut(); // ??
-    // dst.len() == w*h*3
-
-    for y in 0..config.height {
-        for x in 0..config.width {
-            let src_idx: usize = ((y * config.width + x) * 4).try_into().unwrap();
-            let b = data_u8[src_idx + 0];
-            let g = data_u8[src_idx + 1];
-            let r = data_u8[src_idx + 2];
-            let _a = data_u8[src_idx + 3];
-
-            let dst_idx: usize = ((y * config.width + x) * 3).try_into().unwrap();
-            dst[dst_idx + 0] = r;
-            dst[dst_idx + 1] = g;
-            dst[dst_idx + 2] = b;
-        }
-    }
+    // Копируем в RgbaImage (RGBA) с SIMD-оптимизацией
+    // Raqote: BGRA per-pixel (b,g,r,a) on little-endian. Конвертируем в RGBA.
+    let dst = img.as_mut();
+    // dst.len() == w*h*4
+    
+    convert_bgra_to_rgba(data_u8, dst);
+    
     Ok(())
 }
 
 // todo: delete
-fn draw_line(img: &mut RgbImage, x1: u32, y1: u32, x2: u32, y2: u32, color: [u8; 3]) {
+fn draw_line(img: &mut RgbaImage, x1: u32, y1: u32, x2: u32, y2: u32, color: [u8; 3]) {
     let dx = (x2 as i32 - x1 as i32).abs();
     let dy = (y2 as i32 - y1 as i32).abs();
     let sx = if x1 < x2 { 1 } else { -1 };
@@ -297,7 +343,7 @@ fn draw_line(img: &mut RgbImage, x1: u32, y1: u32, x2: u32, y2: u32, color: [u8;
 
     loop {
         if x >= 0 && x < img.width() as i32 && y >= 0 && y < img.height() as i32 {
-            img.put_pixel(x as u32, y as u32, Rgb(color));
+            img.put_pixel(x as u32, y as u32, Rgba([color[0], color[1], color[2], 255]));
         }
 
         if x == x2 as i32 && y == y2 as i32 {
@@ -316,7 +362,7 @@ fn draw_line(img: &mut RgbImage, x1: u32, y1: u32, x2: u32, y2: u32, color: [u8;
     }
 }
 
-/// Рисует антиалиасную линию в `RgbImage`
+/// Рисует антиалиасную линию в DrawTarget
 /// расстояния — в пикселях (u32)
 pub fn draw_line_dt(
     dt: &mut DrawTarget,
@@ -354,7 +400,7 @@ pub fn draw_line_dt(
 
 // todo: delete
 pub fn draw_line_new(
-    img: &mut RgbImage,
+    img: &mut RgbaImage,
     x1: u32,
     y1: u32,
     x2: u32,
@@ -392,29 +438,14 @@ pub fn draw_line_new(
 
     // Получаем сырые байты BGRA (u8) из DrawTarget
     // docs.rs: get_data_u8() / get_data_u8_mut() дают BGRA порядок (little endian).
-    // Мы прочитаем их и конвертируем в image::RgbImage (RGB).
+    // Мы прочитаем их и конвертируем в image::RgbaImage (RGBA).
     let data_u8 = dt.get_data_u8(); // &[u8], порядок BGRA для каждого пикселя
     // data_u8.len() == (w*h*4)
 
-    // Копируем в RgbImage (RGB)
-    // Raqote: BGRA per-pixel (b,g,r,a) on little-endian. Берём b,g,r и игнорируем alpha.
-    let mut dst = img.as_mut();
-    // dst.len() == w*h*3
-    let width = w as usize;
-    let height = h as usize;
-
-    for y in 0..height {
-        for x in 0..width {
-            let src_idx = (y * width + x) * 4;
-            let b = data_u8[src_idx + 0];
-            let g = data_u8[src_idx + 1];
-            let r = data_u8[src_idx + 2];
-            // let a = data_u8[src_idx + 3];
-
-            let dst_idx = (y * width + x) * 3;
-            dst[dst_idx + 0] = r;
-            dst[dst_idx + 1] = g;
-            dst[dst_idx + 2] = b;
-        }
-    }
+    // Копируем в RgbaImage (RGBA) с SIMD-оптимизацией
+    // Raqote: BGRA per-pixel (b,g,r,a) on little-endian. Конвертируем в RGBA.
+    let dst = img.as_mut();
+    // dst.len() == w*h*4
+    
+    convert_bgra_to_rgba(data_u8, dst);
 }

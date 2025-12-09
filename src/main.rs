@@ -594,6 +594,7 @@ async fn handle_request(
         file_param,
         &well_info_text,
         config.scale_spacing,
+        config.max_scales,
     ).map_err(|e| actix_web::error::ErrorInternalServerError(e))
     .map_err(|e| actix_web::error::ErrorInternalServerError(format!("Failed to generate HTML: {}", e)))?;
 
@@ -679,6 +680,7 @@ fn generate_html(
     file_name: &str,
     well_info: &[(String, String)],
     scale_spacing: usize,
+    max_scales: usize,
 ) -> Result<impl futures::Stream<Item = Result<Bytes, actix_web::Error>> + 'static, actix_web::Error> {
     //let curves_data = Arc::new(curves_data);
     let depth_data = Arc::new(depth_data);
@@ -688,36 +690,14 @@ fn generate_html(
 
     // HTML над строки таблицы со шкалой
     let mut html_before_scale = String::new();
-    html_before_scale.push_str("<html><head><meta charset='utf-8'><title>LAS Plot</title></head><body>\n");
-    html_before_scale.push_str(&format!("<h1>LAS Plot - {}</h1>\n", file_name));
+    html_before_scale.push_str(&format!("<html><head><meta charset='utf-8'><title>LAS Plot - {}</title></head><body>\n", file_name));
+    html_before_scale.push_str(&format!("<h2>LAS Plot - {}</h2>\n", file_name));
     
-    // Выводим информацию из секции ~Well в таблице с 2 колонками
-    if !well_info.is_empty() {
-        html_before_scale.push_str("<table style='border: none; border-style: none; border-collapse: collapse; font-family: monospace; border-spacing: 0;'>\n");
-        for (key, value) in well_info {
-            // Разделяем на часть до двоеточия и после
-            if let Some(colon_pos) = value.find(':') {
-                let before_colon = &value[..colon_pos].trim(); // Без двоеточия
-                let after_colon = &value[colon_pos + 1..].trim();
-                html_before_scale.push_str(&format!(
-                    "<tr style='border: none'><td style='text-align: right; padding-right: 5px; border: none'>{}{}</td><td style='text-align: left; padding-left: 5px; border: none'>{}</td></tr>\n",
-                    before_colon, ":", after_colon
-                ));
-            } else {
-                // Если нет двоеточия, выводим ключ в первой колонке с двоеточием, значение во второй
-                html_before_scale.push_str(&format!(
-                    "<tr style='border: none'><td style='text-align: right; padding-right: 5px; border: none'>{}{}</td><td style='text-align: left; padding-left: 5px; border: none'>{}</td></tr>\n",
-                    key, ":", value
-                ));
-            }
-        }
-        html_before_scale.push_str("</table>\n");
-        html_before_scale.push_str("<br>\n"); // Отступ после таблицы
-    }
-    
-    html_before_scale.push_str("<table border='1' cellpadding='5' style='border-collapse: collapse; border: 1px solid #ccc;'>\n");
-    html_before_scale.push_str("<style>table th, table td { border: 1px solid #ccc; }</style>\n");
-    html_before_scale.push_str("<tr><th>Color</th><th>Mnemonic</th><th>Measure</th><th>Description</th><th>min</th><th>max</th></tr>\n");
+    // Генерируем HTML для двух верхних таблиц
+    let mut curves_table_html = String::new();
+    curves_table_html.push_str("<table border='1' cellpadding='5' style='border-collapse: collapse; border: 1px solid #ccc; font-family: monospace;'>\n");
+    curves_table_html.push_str("<style>table th, table td { border: 1px solid #ccc; }</style>\n");
+    curves_table_html.push_str("<tr><th>Color</th><th>Mnemonic</th><th>Measure</th><th>Description</th><th>min</th><th>max</th></tr>\n");
 
     for (idx, (mnemonic, unit, description)) in curves_info.iter().enumerate() {
         if let Some((min, max)) = curves_stats.get(idx).and_then(|s| *s) {
@@ -736,24 +716,60 @@ fn generate_html(
                 "<td></td>".to_string()
             };
             
-            html_before_scale.push_str(&format!(
-                "<tr>{}<td>{}</td><td>{}</td><td>{}</td><td>{:.2}</td><td>{:.2}</td></tr>\n",
+            curves_table_html.push_str(&format!(
+                "<tr>{}<td>{}</td><td>{}</td><td>{}</td><td style='text-align: right;'>{:.2}</td><td style='text-align: right;'>{:.2}</td></tr>\n",
                 color_cell, mnemonic, unit, description, min, max
             ));
         }
     }
-
-    html_before_scale.push_str("</table>\n");
-    html_before_scale.push_str("<br>\n");
-    html_before_scale.push_str("<table border='1' cellspacing='0' cellpadding='0' style='border-collapse: collapse; border-spacing: 0; margin: 0; padding: 0; border: 1px solid #ccc;'>\n");
+    curves_table_html.push_str("</table>\n");
+    
+    let mut well_table_html = String::new();
+    // Выводим информацию из секции ~Well в таблице с 2 колонками
+    if !well_info.is_empty() {
+        well_table_html.push_str("<table style='border: none; border-style: none; border-collapse: collapse; font-family: monospace; border-spacing: 0;'>\n");
+        for (key, value) in well_info {
+            // Разделяем на часть до двоеточия и после
+            if let Some(colon_pos) = value.find(':') {
+                let before_colon = &value[..colon_pos].trim(); // Без двоеточия
+                let after_colon = &value[colon_pos + 1..].trim();
+                well_table_html.push_str(&format!(
+                    "<tr style='border: none'><td style='text-align: right; padding-right: 5px; border: none'>{}{}</td><td style='text-align: left; padding-left: 5px; border: none'>{}</td></tr>\n",
+                    before_colon, ":", after_colon
+                ));
+            } else {
+                // Если нет двоеточия, выводим ключ в первой колонке с двоеточием, значение во второй
+                well_table_html.push_str(&format!(
+                    "<tr style='border: none'><td style='text-align: right; padding-right: 5px; border: none'>{}{}</td><td style='text-align: left; padding-left: 5px; border: none'>{}</td></tr>\n",
+                    key, ":", value
+                ));
+            }
+        }
+        well_table_html.push_str("</table>\n");
+    }
+    
+    // Начинаем таблицу с графиками
+    html_before_scale.push_str("<table border='0' cellspacing='0' cellpadding='0' style='border-collapse: collapse; border-spacing: 0; margin: 0; padding: 0; font-family: monospace;'>\n");
+    
+    // Первая строка с объединённой ячейкой для верхних таблиц
+    let colspan = if separate_depth_column { 2 } else { 1 };
+    html_before_scale.push_str(&format!(
+        "<tr style='border: none; border-width: 0; border-collapse: collapse;'><td colspan='{}' style='padding: 10px 10px 10px 0; border: none; border-width: 0; border-collapse: collapse; vertical-align: top;'><div style='display: flex; gap: 20px; align-items: flex-start;'><div style='vertical-align: top;'>{}</div><div style='vertical-align: top; margin-left: auto; text-align: right;'>{}</div></div></td></tr>\n",
+        colspan, curves_table_html, well_table_html
+    ));
 
     // HTML строки таблицы со шкалой
     // Высота шкалы соответствует полной высоте строки
+    // Ограничиваем количество кривых для шкалы до max_scales
+    let scale_curves_data: Vec<_> = curves_data.iter().take(max_scales).cloned().collect();
+    let scale_colors: Vec<_> = colors.iter().take(max_scales).cloned().collect();
+    let scale_x_ranges: Vec<_> = x_ranges.iter().take(max_scales).cloned().collect();
+    
     let scale_config = PlotConfig {
         width: image_width as u32,
         height: row_height as u32,
-        colors: colors.clone(),
-        x_ranges: x_ranges.clone(),
+        colors: scale_colors,
+        x_ranges: scale_x_ranges,
         y_range: (depth_min, depth_max),
         show_scales: true,
         pixels_per_step,
@@ -763,7 +779,7 @@ fn generate_html(
 
     let scale_png = generate_plot_png(
         &scale_config,
-        curves_data.to_vec(),
+        scale_curves_data,
         &depth_data,
         0,
         html_row_steps.min(depth_data.len()),

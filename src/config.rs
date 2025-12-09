@@ -14,6 +14,8 @@ pub struct Config {
     pub pixels_per_step: usize,
     pub image_width: usize,
     pub scale_spacing: usize,
+    #[serde(default = "default_max_scales")]
+    pub max_scales: usize,
     pub default_colors: Vec<String>,
     pub separate_depth_column: bool,
 }
@@ -28,6 +30,10 @@ fn default_bind_port() -> u16 {
 
 fn default_laslist_file() -> String {
     "lasfiles.txt".to_string()
+}
+
+fn default_max_scales() -> usize {
+    6
 }
 
 impl Config {
