@@ -13,6 +13,7 @@ pub struct Config {
     pub html_row_steps: usize,
     pub pixels_per_step: usize,
     pub image_width: usize,
+    pub scale_spacing: usize,
     pub default_colors: Vec<String>,
     pub separate_depth_column: bool,
 }

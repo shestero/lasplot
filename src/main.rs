@@ -513,7 +513,8 @@ async fn handle_request(
     }
 
     // Вычисляем количество строк
-    let row_height = config.html_row_steps * config.pixels_per_step;
+    // Высота = html_row_steps * pixels_per_step + 1
+    let row_height = config.html_row_steps * config.pixels_per_step + 1;
 
     // Подготавливаем данные для заголовка (клонируем нужные части)
     let curves_info: Vec<_> = curves.iter().map(|c| (c.mnemonic.clone(), c.unit.clone(), c.description.clone())).collect();
@@ -592,7 +593,8 @@ async fn handle_request(
         curve_to_color,
         file_param,
         &well_info_text,
-    )
+        config.scale_spacing,
+    ).map_err(|e| actix_web::error::ErrorInternalServerError(e))
     .map_err(|e| actix_web::error::ErrorInternalServerError(format!("Failed to generate HTML: {}", e)))?;
 
     let response =
@@ -645,12 +647,12 @@ async fn generate_html_row(
     
     let row_html = if separate_depth_column {
         format!(
-            "<tr height='{}' style='vertical-align: top; margin: 0; padding: 0;'><td valign='top' style='padding: 0; margin: 0;'>{:.2}</td><td style='padding: 0; margin: 0; vertical-align: top;'><img src='data:image/png;base64,{}' alt='Plot' width='{}' height='{}' style='display: block;'></td></tr>\n",
+            "<tr height='{}' style='vertical-align: top; margin: 0; padding: 0;'><td valign='top' style='padding: 0; margin: 0; border: 1px solid #ccc;'>{:.2}</td><td style='padding: 0; margin: 0; border: 1px solid #ccc; vertical-align: top;'><img src='data:image/png;base64,{}' alt='Plot' width='{}' height='{}' style='display: block; margin: 0; padding: 0;'></td></tr>\n",
             row_height, start_depth, base64_img, image_width, image_height
         )
     } else {
         format!(
-            "<tr height='{}' style='vertical-align: top; margin: 0; padding: 0;'><td style='padding: 0; margin: 0; vertical-align: top;'><div style='position:relative'><div style='position:absolute;left:5px;top:5px'>{:.2}</div><img src='data:image/png;base64,{}' alt='Plot' width='{}' height='{}' style='display: block;'></div></td></tr>\n",
+            "<tr height='{}' style='vertical-align: top; margin: 0; padding: 0;'><td style='padding: 0; margin: 0; border: 1px solid #ccc; vertical-align: top;'><div style='position:relative; margin: 0; padding: 0;'><div style='position:absolute;left:5px;top:5px'>{:.2}</div><img src='data:image/png;base64,{}' alt='Plot' width='{}' height='{}' style='display: block; margin: 0; padding: 0;'></div></td></tr>\n",
             row_height, start_depth, base64_img, image_width, image_height
         )
     };
@@ -676,6 +678,7 @@ fn generate_html(
     curve_to_color: std::collections::HashMap<usize, String>,
     file_name: &str,
     well_info: &[(String, String)],
+    scale_spacing: usize,
 ) -> Result<impl futures::Stream<Item = Result<Bytes, actix_web::Error>> + 'static, actix_web::Error> {
     //let curves_data = Arc::new(curves_data);
     let depth_data = Arc::new(depth_data);
@@ -688,15 +691,28 @@ fn generate_html(
     html_before_scale.push_str("<html><head><meta charset='utf-8'><title>LAS Plot</title></head><body>\n");
     html_before_scale.push_str(&format!("<h1>LAS Plot - {}</h1>\n", file_name));
     
-    // Выводим информацию из секции ~Well
+    // Выводим информацию из секции ~Well в таблице с 2 колонками
     if !well_info.is_empty() {
-        html_before_scale.push_str("<pre style='font-family: monospace;'>\n");
+        html_before_scale.push_str("<table style='border: none; border-style: none; border-collapse: collapse; font-family: monospace; border-spacing: 0;'>\n");
         for (key, value) in well_info {
-            // Убираем точку из ключа для отображения (если есть)
-            let display_key = key.trim_end_matches('.');
-            html_before_scale.push_str(&format!("{}: {}\n", display_key, value));
+            // Разделяем на часть до двоеточия и после
+            if let Some(colon_pos) = value.find(':') {
+                let before_colon = &value[..colon_pos].trim(); // Без двоеточия
+                let after_colon = &value[colon_pos + 1..].trim();
+                html_before_scale.push_str(&format!(
+                    "<tr style='border: none'><td style='text-align: right; padding-right: 5px; border: none'>{}{}</td><td style='text-align: left; padding-left: 5px; border: none'>{}</td></tr>\n",
+                    before_colon, ":", after_colon
+                ));
+            } else {
+                // Если нет двоеточия, выводим ключ в первой колонке с двоеточием, значение во второй
+                html_before_scale.push_str(&format!(
+                    "<tr style='border: none'><td style='text-align: right; padding-right: 5px; border: none'>{}{}</td><td style='text-align: left; padding-left: 5px; border: none'>{}</td></tr>\n",
+                    key, ":", value
+                ));
+            }
         }
-        html_before_scale.push_str("</pre>\n");
+        html_before_scale.push_str("</table>\n");
+        html_before_scale.push_str("<br>\n"); // Отступ после таблицы
     }
     
     html_before_scale.push_str("<table border='1' cellpadding='5' style='border-collapse: collapse; border: 1px solid #ccc;'>\n");
@@ -729,7 +745,7 @@ fn generate_html(
 
     html_before_scale.push_str("</table>\n");
     html_before_scale.push_str("<br>\n");
-    html_before_scale.push_str("<table border='0' cellspacing='0' cellpadding='0' style='border-collapse: collapse;'>\n");
+    html_before_scale.push_str("<table border='1' cellspacing='0' cellpadding='0' style='border-collapse: collapse; border-spacing: 0; margin: 0; padding: 0; border: 1px solid #ccc;'>\n");
 
     // HTML строки таблицы со шкалой
     // Высота шкалы соответствует полной высоте строки
@@ -740,6 +756,9 @@ fn generate_html(
         x_ranges: x_ranges.clone(),
         y_range: (depth_min, depth_max),
         show_scales: true,
+        pixels_per_step,
+        html_row_steps,
+        scale_spacing,
     };
 
     let scale_png = generate_plot_png(
@@ -753,19 +772,19 @@ fn generate_html(
     let scale_base64 = base64::engine::general_purpose::STANDARD.encode(&scale_png);
     let html_scale_row = if separate_depth_column {
         format!(
-            "<tr style='vertical-align: top; margin: 0; padding: 0;'><td style='padding: 0; margin: 0;'></td><td style='padding: 0; margin: 0; vertical-align: top;'><img src='data:image/png;base64,{}' alt='Scales' width='{}' style='display: block;'></td></tr>\n",
+            "<tr style='vertical-align: top; margin: 0; padding: 0;'><td style='padding: 0; margin: 0; border: 1px solid #ccc;'></td><td style='padding: 0; margin: 0; border: 1px solid #ccc; vertical-align: top;'><img src='data:image/png;base64,{}' alt='Scales' width='{}' style='display: block; margin: 0; padding: 0;'></td></tr>\n",
             scale_base64, image_width
         )
     } else {
         format!(
-            "<tr style='vertical-align: top; margin: 0; padding: 0;'><td style='padding: 0; margin: 0; vertical-align: top;'><img src='data:image/png;base64,{}' alt='Scales' width='{}' style='display: block;'></td></tr>\n",
+            "<tr style='vertical-align: top; margin: 0; padding: 0;'><td style='padding: 0; margin: 0; border: 1px solid #ccc; vertical-align: top;'><img src='data:image/png;base64,{}' alt='Scales' width='{}' style='display: block; margin: 0; padding: 0;'></td></tr>\n",
             scale_base64, image_width
         )
     };
 
     // HTML строк с изображением
-    // Высота каждого блока фиксированная: html_row_steps * pixels_per_step
-    let block_height = html_row_steps * pixels_per_step;
+    // Высота каждого блока: html_row_steps * pixels_per_step + 1
+    let block_height = (1+html_row_steps) * pixels_per_step;
     
     let plot_config = Arc::new(PlotConfig {
         width: image_width as u32,
@@ -774,6 +793,9 @@ fn generate_html(
         x_ranges: x_ranges.clone(),
         y_range: (depth_min, depth_max),
         show_scales: false,
+        pixels_per_step,
+        html_row_steps,
+        scale_spacing,
     });
 
     /*
@@ -818,21 +840,55 @@ fn generate_html(
             let plot_config = plot_config.clone();
             let curves_data = curves_data.clone();
             let depth_data = depth_data.clone();
+            let num_rows = num_rows;
 
             async move {
                 if start_block_value >= depth_len {
                     return Ok(String::new());
                 }
 
-                let actual_steps = end_block_value - start_block_value;
-                let image_height = actual_steps * pixels_per_step;
+                // Для всех строк кроме последней добавляем еще один шаг из следующей строки
+                // (если он существует и не None)
+                let is_last_row = row_idx == num_rows - 1;
+                let actual_end = if is_last_row {
+                    end_block_value
+                } else {
+                    // Добавляем еще один шаг, если он существует и не None
+                    if end_block_value < depth_len {
+                        // Проверяем, что следующий шаг не None
+                        if depth_data.get(end_block_value).and_then(|&d| d).is_some() {
+                            end_block_value + 1
+                        } else {
+                            end_block_value
+                        }
+                    } else {
+                        end_block_value
+                    }
+                };
+                
+                // Высота изображения должна быть равна высоте строки (block_height)
+                // независимо от количества шагов в этом блоке
+                let image_height = block_height;
 
+                // Создаем PlotConfig с правильной высотой для этого блока
+                let block_plot_config = PlotConfig {
+                    width: plot_config.width,
+                    height: block_height as u32, // Используем фиксированную высоту блока
+                    colors: plot_config.colors.clone(),
+                    x_ranges: plot_config.x_ranges.clone(),
+                    y_range: plot_config.y_range,
+                    show_scales: false,
+                    pixels_per_step: plot_config.pixels_per_step,
+                    html_row_steps: plot_config.html_row_steps,
+                    scale_spacing: plot_config.scale_spacing,
+                };
+                
                 generate_html_row(
-                    &plot_config,
+                    &block_plot_config,
                     curves_data.to_vec(),
                     &depth_data,
                     start_block_value,
-                    end_block_value,
+                    actual_end,
                     block_height,
                     image_width,
                     image_height,

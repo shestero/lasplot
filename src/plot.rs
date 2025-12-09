@@ -25,6 +25,9 @@ pub struct PlotConfig {
     pub x_ranges: Vec<(f64, f64)>,
     pub y_range: (f64, f64),
     pub show_scales: bool,
+    pub pixels_per_step: usize,
+    pub html_row_steps: usize,
+    pub scale_spacing: usize,
 }
 
 pub fn generate_plot_png(
@@ -69,40 +72,87 @@ fn draw_scales(
     config: &PlotConfig,
     curves_data: Vec<(Vec<Option<f64>>, String)>,
 ) -> Result<()> {
-    let mut x_pos = 20u32;
-    let scale_height = (config.height as f64 * 0.8) as u32;
-    let scale_y_start = (config.height as f64 * 0.1) as u32;
+    let plot_x_start = 100u32;
+    let plot_width = (config.width as i32 - plot_x_start as i32) as u32;
+    
+    // Создаём DrawTarget для антиалиасинга
+    let mut dt = DrawTarget::new(config.width as i32, config.height as i32);
+    dt.clear(SolidSource::from_unpremultiplied_argb(0xFF, 0xFF, 0xFF, 0xFF));
 
+    let mut y_pos = config.scale_spacing as u32;
+    
     for (idx, (_, _name)) in curves_data.iter().enumerate() {
-        if idx >= config.x_ranges.len() {
+        if idx >= config.x_ranges.len() || idx >= config.colors.len() {
             continue;
         }
 
-        let (_min, _max) = config.x_ranges[idx];
+        let (x_min, x_max) = config.x_ranges[idx];
+        let rgb = config.colors[idx];
         
-        // Рисуем вертикальную линию шкалы
-        for y in scale_y_start..(scale_y_start + scale_height) {
-            if x_pos < config.width {
-                img.put_pixel(x_pos, y, Rgb([0, 0, 0]));
-            }
-        }
-
-        // Рисуем метки
+        // Рисуем горизонтальную линию шкалы
+        let x_start = plot_x_start as f32;
+        let x_end = (plot_x_start + plot_width) as f32;
+        let y = y_pos as f32;
+        
+        let mut pb = PathBuilder::new();
+        pb.move_to(x_start, y);
+        pb.line_to(x_end, y);
+        let path = pb.finish();
+        
+        let source = Source::Solid(SolidSource {
+            r: rgb[0],
+            g: rgb[1],
+            b: rgb[2],
+            a: 255,
+        });
+        
+        let stroke = StrokeStyle {
+            width: 1.0,
+            cap: LineCap::Round,
+            join: LineJoin::Round,
+            miter_limit: 10.0,
+            ..StrokeStyle::default()
+        };
+        
+        dt.stroke(&path, &source, &stroke, &raqote::DrawOptions::new());
+        
+        // Рисуем метки (вертикальные линии)
         let num_ticks = 5;
         for i in 0..=num_ticks {
-            let tick_y = scale_y_start + (i * scale_height / num_ticks);
+            let t = i as f32 / num_ticks as f32;
+            let tick_x = x_start + t * (x_end - x_start);
+            let tick_y_start = (y_pos.saturating_sub(3)) as f32;
+            let tick_y_end = (y_pos + 3) as f32;
             
-            // Короткая горизонтальная линия
-            for x in x_pos.saturating_sub(5)..=x_pos.saturating_add(5) {
-                if x < config.width && tick_y < config.height {
-                    img.put_pixel(x, tick_y, Rgb([0, 0, 0]));
-                }
-            }
+            let mut pb_tick = PathBuilder::new();
+            pb_tick.move_to(tick_x, tick_y_start);
+            pb_tick.line_to(tick_x, tick_y_end);
+            let path_tick = pb_tick.finish();
+            
+            dt.stroke(&path_tick, &source, &stroke, &raqote::DrawOptions::new());
         }
 
-        x_pos += 80;
-        if x_pos >= config.width {
+        y_pos += config.scale_spacing as u32;
+        if y_pos >= config.height {
             break;
+        }
+    }
+    
+    // Копируем из DrawTarget в RgbImage
+    let data_u8: &[u8] = dt.get_data_u8();
+    let /* mut */ dst = img.as_mut();
+    
+    for y in 0..config.height {
+        for x in 0..config.width {
+            let src_idx: usize = ((y * config.width + x) * 4).try_into().unwrap();
+            let b = data_u8[src_idx + 0];
+            let g = data_u8[src_idx + 1];
+            let r = data_u8[src_idx + 2];
+            
+            let dst_idx: usize = ((y * config.width + x) * 3).try_into().unwrap();
+            dst[dst_idx + 0] = r;
+            dst[dst_idx + 1] = g;
+            dst[dst_idx + 2] = b;
         }
     }
 
@@ -118,7 +168,7 @@ fn draw_curves(
     depth_end_idx: usize,
 ) -> Result<()> {
     let plot_width = config.width as f64;
-    let plot_height = config.height as f64;
+    let plot_height = (config.height as f64 * 1.04) as f64; // TODO: coef!
     let plot_x_start = 100 as f64;
     let plot_y_start = 0 as f64;
     let (mut y_min, mut y_max) = config.y_range;
@@ -128,12 +178,27 @@ fn draw_curves(
     let mut valid_indices = Vec::new();
 
     let (mut ymin, mut ymax): (Option::<f64>, Option::<f64>) = (None, None);
-    for i in depth_start_idx..depth_end_idx.min(depth_data.len()) {
+    // depth_end_idx может быть на 1 больше для включения общего шага со следующей строкой
+    // Включаем все индексы от depth_start_idx до depth_end_idx (включительно)
+    // Но не выходим за границы массива
+    let actual_end = depth_end_idx.min(depth_data.len());
+    // Используем ..= для включения последнего индекса, если он в пределах массива
+    for i in depth_start_idx..actual_end {
         if let Some(depth) = depth_data.get(i).and_then(|&d| d) {
             ymin = Some(ymin.map_or(depth, |m| m.min(depth)));
             ymax = Some(ymax.map_or(depth, |m| m.max(depth)));
             depth_slice.push(depth);
             valid_indices.push(i);
+        }
+    }
+    // Если depth_end_idx указывает на следующий шаг (html_row_steps+1) и он в пределах массива, включаем его
+    // Это нужно для того, чтобы последний шаг был общим со следующей строкой
+    if depth_end_idx < depth_data.len() && depth_end_idx >= actual_end {
+        if let Some(depth) = depth_data.get(depth_end_idx).and_then(|&d| d) {
+            ymin = Some(ymin.map_or(depth, |m| m.min(depth)));
+            ymax = Some(ymax.map_or(depth, |m| m.max(depth)));
+            depth_slice.push(depth);
+            valid_indices.push(depth_end_idx);
         }
     }
     // avoid div to zero
@@ -161,6 +226,7 @@ fn draw_curves(
 
         let mut last_point: Option<(u32, u32)> = None;
 
+        // Обрабатываем все индексы из valid_indices (включая последний шаг html_row_steps+1, если он есть)
         for (slice_idx, &data_idx) in valid_indices.iter().enumerate() {
             if data_idx >= data.len() {
                 continue;
@@ -170,18 +236,15 @@ fn draw_curves(
                 let depth = depth_slice[slice_idx];
                 
                 let x = plot_x_start + ((value - x_min) / (x_max - x_min)) * plot_width;
-                let y = plot_y_start + ((depth - y_max) / (y_min - y_max)) * plot_height;
+                // Исправляем формулу: y_min (меньшая глубина) должна быть вверху (y=0), y_max (большая глубина) - внизу (y=height)
+                let y = plot_y_start + ((depth - y_min) / (y_max - y_min)) * plot_height;
 
                 let x_int = x as u32;
                 let y_int = y as u32;
 
                 if x_int < config.width && y_int < config.height {
-                    // Рисуем точку
-                    //img.put_pixel(x_int, y_int, Rgb(rgb));
-                    
                     // Рисуем линию от предыдущей точки
                     if let Some((last_x, last_y)) = last_point {
-                        //draw_line(img, last_x, last_y, x_int, y_int, rgb);
                         draw_line_dt(&mut dt, last_x, last_y, x_int, y_int, rgb);
                     }
 
