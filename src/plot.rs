@@ -348,8 +348,10 @@ fn draw_curves(
             valid_indices.push(i);
         }
     }
+
     // Если depth_end_idx указывает на следующий шаг (html_row_steps+1) и он в пределах массива, включаем его
     // Это нужно для того, чтобы последний шаг был общим со следующей строкой
+    /*
     if depth_end_idx < depth_data.len() && depth_end_idx >= actual_end {
         if let Some(depth) = depth_data.get(depth_end_idx).and_then(|&d| d) {
             ymin = Some(ymin.map_or(depth, |m| m.min(depth)));
@@ -358,6 +360,8 @@ fn draw_curves(
             valid_indices.push(depth_end_idx);
         }
     }
+    */
+
     // avoid div to zero
     y_min = ymin.unwrap_or(y_min);
     y_max = ymax.unwrap_or(y_max);
@@ -401,7 +405,7 @@ fn draw_curves(
                 let x_int = x as u32;
                 let y_int = y as u32;
 
-                if x_int < config.width && y_int < config.height {
+                if x_int < config.width /* && y_int < config.height */ {
                     // Рисуем линию от предыдущей точки
                     if let Some((last_x, last_y)) = last_point {
                         draw_line_dt(&mut dt, last_x, last_y, x_int, y_int, rgb);
