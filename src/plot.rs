@@ -100,6 +100,53 @@ pub struct PlotConfig {
     pub scale_spacing: usize,
     pub tick_size_major: usize,
     pub tick_size_minor: usize,
+    pub max_scales: usize,
+}
+
+/// Пара: массив X-координат засечек в пикселях и цвет шкалы
+pub type ScaleTickPositions = Vec<(Vec<u32>, RGBColor)>;
+
+/// Вычисляет позиции длинных засечек для первых max_scales кривых
+fn calculate_scale_tick_positions(
+    config: &PlotConfig,
+    curves_data: &[(Vec<Option<f64>>, String)],
+) -> ScaleTickPositions {
+    let plot_x_start = 100u32;
+    let plot_width = config.width.saturating_sub(plot_x_start);
+    let mut result = Vec::new();
+    
+    let max_curves = config.max_scales.min(curves_data.len()).min(config.colors.len()).min(config.x_ranges.len());
+    
+    for idx in 0..max_curves {
+        let (x_min, x_max) = config.x_ranges[idx];
+        let color = config.colors[idx];
+        let mut tick_positions = Vec::new();
+        
+        if x_max > x_min && x_max.is_finite() && x_min.is_finite() {
+            let range = x_max - x_min;
+            let order = range.log10().floor();
+            let major_step = 10_f64.powf(order);
+            let first_major = (x_min / major_step).ceil() * major_step;
+            
+            let mut major_value = first_major;
+            while major_value <= x_max {
+                // Вычисляем X-координату в пикселях (целое число)
+                let t = (major_value - x_min) / range;
+                let x_pixel_f64 = plot_x_start as f64 + t * plot_width as f64;
+                let x_pixel = x_pixel_f64.round() as u32;
+                
+                // Проверяем, что координата в пределах области графика
+                if x_pixel >= plot_x_start && x_pixel < plot_x_start + plot_width {
+                    tick_positions.push(x_pixel);
+                }
+                major_value += major_step;
+            }
+        }
+        
+        result.push((tick_positions, color));
+    }
+    
+    result
 }
 
 pub fn generate_plot_png(
@@ -116,12 +163,15 @@ pub fn generate_plot_png(
         *pixel = Rgba([255, 255, 255, 255]);
     }
 
+    // Вычисляем позиции засечек для первых max_scales кривых
+    let scale_tick_positions = calculate_scale_tick_positions(config, &curves_data);
+
     if config.show_scales {
         // Рисуем шкалы для каждого параметра
         draw_scales(&mut img, config, curves_data)?;
     } else {
         // Рисуем графики
-        draw_curves(&mut img, config, curves_data, depth_data, depth_start_idx, depth_end_idx)?;
+        draw_curves(&mut img, config, curves_data, depth_data, depth_start_idx, depth_end_idx, &scale_tick_positions)?;
     }
 
     // Конвертируем в PNG
@@ -272,6 +322,7 @@ fn draw_curves(
     depth_data: &[Option<f64>],
     depth_start_idx: usize,
     depth_end_idx: usize,
+    scale_tick_positions: &ScaleTickPositions,
 ) -> Result<()> {
     let plot_width = config.width as f64;
     let plot_height = config.height as f64; // (config.height as f64 * 1.04) as f64; // TODO: coef!
@@ -320,6 +371,8 @@ fn draw_curves(
 
     // (Опционально?) очистим фон прозрачным/белым
     dt.clear(SolidSource::from_unpremultiplied_argb(0xFF, 0xFF, 0xFF, 0xFF));
+
+    // Вертикальные линии будут нарисованы после копирования из dt в img
 
     // Рисуем графики в обратном порядке (первые параметры важнее, не перекрываются)
     for (curve_idx, (data, _)) in curves_data.iter().enumerate().rev() {
@@ -375,6 +428,57 @@ fn draw_curves(
     // dst.len() == w*h*4
     
     convert_bgra_to_rgba(data_u8, dst);
+    
+    // Рисуем вертикальные линии под длинными засечками шкал напрямую на RgbaImage
+    // Рисуем их после графиков, чтобы они были под графиками
+    // Используем прямое рисование пикселей, чтобы избежать проблем с raqote
+    let plot_x_start_u32 = plot_x_start as u32;
+    let plot_width_u32 = (plot_width - plot_x_start) as u32;
+
+    for (tick_positions, color) in scale_tick_positions.iter() {
+        if tick_positions.is_empty() {
+            continue;
+        }
+
+        // Рисуем вертикальные линии для каждой длинной засечки
+        for &x_pixel in tick_positions.iter() {
+            // Проверяем, что X в пределах области графика
+            if x_pixel < plot_x_start_u32 || x_pixel >= plot_x_start_u32 + plot_width_u32 {
+                continue;
+            }
+            
+            // Проверяем, что координата в пределах изображения
+            if x_pixel >= config.width {
+                continue;
+            }
+            
+            // Рисуем вертикальную пунктирную линию напрямую на img (RGBA)
+            // Используем полупрозрачный цвет для "жидкого" вида
+            // Рисуем только каждый 4-й пиксель для пунктирного эффекта
+            let alpha = 128u8;
+            
+            for y in (0..config.height).step_by(4) {
+                let pixel = img.get_pixel_mut(x_pixel, y);
+                // Альфа-блендинг с белым фоном: result = source * alpha/255 + background * (1 - alpha/255)
+                let bg_r = pixel[0] as u16;
+                let bg_g = pixel[1] as u16;
+                let bg_b = pixel[2] as u16;
+                
+                let src_r = color[0] as u16;
+                let src_g = color[1] as u16;
+                let src_b = color[2] as u16;
+                
+                let alpha_f = alpha as u16;
+                let inv_alpha = 255u16 - alpha_f;
+                
+                let r = ((src_r * alpha_f + bg_r * inv_alpha) / 255) as u8;
+                let g = ((src_g * alpha_f + bg_g * inv_alpha) / 255) as u8;
+                let b = ((src_b * alpha_f + bg_b * inv_alpha) / 255) as u8;
+                
+                *pixel = image::Rgba([r, g, b, 255]);
+            }
+        }
+    }
     
     Ok(())
 }

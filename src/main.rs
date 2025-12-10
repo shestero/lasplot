@@ -762,6 +762,7 @@ fn generate_html(
         scale_spacing,
         tick_size_major,
         tick_size_minor,
+        max_scales,
     };
 
     let scale_png = generate_plot_png(
@@ -801,6 +802,7 @@ fn generate_html(
         scale_spacing,
         tick_size_major,
         tick_size_minor,
+        max_scales,
     });
 
     /*
@@ -888,6 +890,7 @@ fn generate_html(
                     scale_spacing: plot_config.scale_spacing,
                     tick_size_major: plot_config.tick_size_major,
                     tick_size_minor: plot_config.tick_size_minor,
+                    max_scales: plot_config.max_scales,
                 };
                 
                 generate_html_row(
