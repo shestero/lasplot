@@ -744,15 +744,29 @@ fn generate_html(
     ));
 
     // HTML строки таблицы со шкалой
-    // Высота шкалы соответствует полной высоте строки
     // Ограничиваем количество кривых для шкалы до max_scales
     let scale_curves_data: Vec<_> = curves_data.iter().take(max_scales).cloned().collect();
     let scale_colors: Vec<_> = colors.iter().take(max_scales).cloned().collect();
     let scale_x_ranges: Vec<_> = x_ranges.iter().take(max_scales).cloned().collect();
     
+    // Вычисляем реальное количество отображаемых шкал
+    let actual_scales_count = scale_curves_data.len();
+    
+    // Вычисляем высоту изображения на основе количества шкал:
+    // Первая шкала начинается с отступом scale_spacing сверху
+    // Последняя шкала находится на позиции: actual_scales_count * scale_spacing
+    // Нижняя точка засечки последней шкалы: actual_scales_count * scale_spacing + tick_size_major
+    // Добавляем такой же отступ снизу (scale_spacing) для симметрии
+    let scale_height = if actual_scales_count > 0 {
+        // Позиция последней шкалы + нижняя засечка + отступ снизу
+        (actual_scales_count * scale_spacing) + tick_size_major + scale_spacing
+    } else {
+        scale_spacing * 2
+    };
+    
     let scale_config = PlotConfig {
         width: image_width as u32,
-        height: row_height as u32,
+        height: scale_height as u32,
         colors: scale_colors,
         x_ranges: scale_x_ranges,
         y_range: (depth_min, depth_max),
@@ -776,13 +790,13 @@ fn generate_html(
     let scale_base64 = base64::engine::general_purpose::STANDARD.encode(&scale_png);
     let html_scale_row = if separate_depth_column {
         format!(
-            "<tr style='vertical-align: top; margin: 0; padding: 0;'><td style='padding: 0; margin: 0; border: 1px solid #ccc;'></td><td style='padding: 0; margin: 0; border: 1px solid #ccc; vertical-align: top;'><img src='data:image/png;base64,{}' alt='Scales' width='{}' style='display: block; margin: 0; padding: 0;'></td></tr>\n",
-            scale_base64, image_width
+            "<tr height='{}' style='vertical-align: top; margin: 0; padding: 0;'><td style='padding: 0; margin: 0; border: 1px solid #ccc;'></td><td style='padding: 0; margin: 0; border: 1px solid #ccc; vertical-align: top;'><img src='data:image/png;base64,{}' alt='Scales' width='{}' height='{}' style='display: block; margin: 0; padding: 0;'></td></tr>\n",
+            scale_height, scale_base64, image_width, scale_height
         )
     } else {
         format!(
-            "<tr style='vertical-align: top; margin: 0; padding: 0;'><td style='padding: 0; margin: 0; border: 1px solid #ccc; vertical-align: top;'><img src='data:image/png;base64,{}' alt='Scales' width='{}' style='display: block; margin: 0; padding: 0;'></td></tr>\n",
-            scale_base64, image_width
+            "<tr height='{}' style='vertical-align: top; margin: 0; padding: 0;'><td style='padding: 0; margin: 0; border: 1px solid #ccc; vertical-align: top;'><img src='data:image/png;base64,{}' alt='Scales' width='{}' height='{}' style='display: block; margin: 0; padding: 0;'></td></tr>\n",
+            scale_height, scale_base64, image_width, scale_height
         )
     };
 
