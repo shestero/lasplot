@@ -12,8 +12,8 @@ use futures::stream::{self, once, StreamExt};
 use futures::TryStreamExt;
 use las::LasFile;
 use plot::{hex_to_rgb, generate_plot_png, PlotConfig, RGBColor};
-//use std::collections::hash_map::DefaultHasher;
-//use std::hash::{Hash, Hasher};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use url::Url;
 
@@ -449,8 +449,6 @@ async fn handle_request(
     let mut color_hex_strings = colors.clone();
 
     // Генерируем случайные цвета для недостающих параметров
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
     let curves = Arc::new(las_file.curves.clone());
     for (idx, curve) in curves.iter().enumerate() {
         if idx == main_param_idx {
